@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF 텍스트+이미지 통합 추출기 (DOCX/HWP 호환)</title>
+    <!-- PDF.js (PDF 읽기) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <!-- docx.js (워드 문서 생성) -->
+    <script src="https://unpkg.com/docx@7.8.2/build/index.js"></script>
+    <!-- FileSaver.js (파일 다운로드) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary: #10B981; /* 통합 문서는 에메랄드 그린 테마 */
+            --primary-light: #34D399;
+            --primary-dark: #059669;
+            --bg: #F8FAFC;
+            --surface: #FFFFFF;
+            --text: #1E293B;
+            --border: #E2E8F0;
+            --radius: 16px;
+            --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        }
+        body {
+            font-family: 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg); color: var(--text);
+            min-height: 100vh; line-height: 1.6;
+        }
+        .header {
+            background: linear-gradient(135deg, var(--primary-dark), var(--primary));
+            color: white; padding: 2rem 1rem; text-align: center;
+        }
+        .container {
+            max-width: 900px; margin: -2rem auto 2rem; padding: 0 1rem;
+        }
+        .drop-zone {
+            background: var(--surface); border: 2px dashed var(--border);
+            border-radius: var(--radius); padding: 3rem 2rem;
+            text-align: center; cursor: pointer; box-shadow: var(--shadow);
+            transition: all 0.3s ease;
+        }
+        .drop-zone:hover { border-color: var(--primary); background: #ECFDF5; }
+        .drop-zone input[type="file"] { display: none; }
+        
+        .progress-container {
+            display: none; background: var(--surface); border-radius: var(--radius);
+            padding: 1.5rem; margin-top: 1rem; text-align: center; box-shadow: var(--shadow);
+        }
+        .progress-container.show { display: block; }
+        .progress-bar-wrapper {
+            width: 100%; height: 8px; background: #E2E8F0;
+            border-radius: 4px; margin: 1rem 0; overflow: hidden;
+        }
+        .progress-bar { height: 100%; background: var(--primary); width: 0%; transition: width 0.3s; }
+        
+        .results { display: none; margin-top: 1.5rem; background: var(--surface); padding: 2rem; border-radius: var(--radius); box-shadow: var(--shadow); text-align: center;}
+        .results.show { display: block; }
+        
+        .btn {
+            padding: 0.8rem 1.5rem; border: none; border-radius: 10px;
+            background: var(--primary); color: white; cursor: pointer;
+            font-weight: 600; font-size: 1rem; transition: background 0.2s;
+        }
+        .btn:hover { background: var(--primary-dark); }
+        .info-box {
+            background: #EFF6FF; border-left: 4px solid #3B82F6;
+            padding: 1rem; margin-top: 1rem; font-size: 0.9rem; text-align: left;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>📑 PDF 통합 문서 변환기</h1>
+    <p>PDF의 텍스트와 이미지를 추출해 한글(.hwpx)에서 편집 가능한 워드(.docx) 문서로 병합합니다.</p>
+</div>
+
+<div class="container">
+    <div class="drop-zone" id="dropZone">
+        <div style="font-size: 3rem; margin-bottom: 1rem;">🔄</div>
+        <h3>PDF 파일을 여기에 드래그하거나 클릭하세요</h3>
+        <p style="color: #64748B; margin-top: 0.5rem;">처리된 파일은 아래아한글 프로그램에서 완벽히 열립니다.</p>
+        <input type="file" id="fileInput" accept=".pdf">
+    </div>
+
+    <div class="progress-container" id="progress">
+        <div id="progressLabel" style="font-weight: 600;">문서 분석 및 병합 중...</div>
+        <div class="progress-bar-wrapper">
+            <div class="progress-bar" id="progressBar"></div>
+        </div>
+        <div id="statusText" style="font-size: 0.85rem; color: #64748B; margin-top: 0.5rem;"></div>
+    </div>
+
+    <div class="results" id="results">
+        <h2 style="margin-bottom: 1rem;">✅ 문서 변환 완료!</h2>
+        <p id="summaryText" style="margin-bottom: 1.5rem; color: #64748B;"></p>
+        <button class="btn" id="downloadBtn">💾 통합 문서(.docx) 다운로드</button>
+        
+        <div class="info-box">
+            <strong>💡 팁:</strong> 다운로드한 파일을 <b>아래아한글(Hancom Office)</b>에서 그대로 열람 및 편집할 수 있습니다. 편집 완료 후 한글에서 <code>[다른 이름으로 저장] ➔ [.hwpx]</code>를 선택하시면 됩니다.
+        </div>
+    </div>
+</div>
+
+<script>
+    // PDF.js 워커 설정
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const progress = document.getElementById('progress');
+    const progressBar = document.getElementById('progressBar');
+    const statusText = document.getElementById('statusText');
+    const results = document.getElementById('results');
+    const downloadBtn = document.getElementById('downloadBtn');
+    
+    let generatedBlob = null;
+    let currentFileName = '';
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.borderColor = 'var(--primary)'; });
+    dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = 'var(--border)'; });
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault(); dropZone.style.borderColor = 'var(--border)';
+        if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', () => {
+        if (fileInput.files.length) handleFile(fileInput.files[0]);
+    });
+
+    // Base64 Data URL을 Uint8Array로 변환 (docx.js 이미지 첨부용)
+    function dataURItoUint8Array(dataURI) {
+        const byteString = atob(dataURI.split(',')[1]);
+        const ia = new Uint8Array(byteString.length);
+        for (let i = 0; i < byteString.length; i++) {
+            ia[i] = byteString.charCodeAt(i);
+        }
+        return ia;
+    }
+
+    async function handleFile(file) {
+        if (file.type !== 'application/pdf') {
+            alert('PDF 파일만 지원합니다.');
+            return;
+        }
+        
+        currentFileName = file.name.replace(/\.[^/.]+$/, "");
+        results.classList.remove('show');
+        progress.classList.add('show');
+        dropZone.style.display = 'none';
+        
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            await processPDFtoWord(arrayBuffer);
+        } catch (error) {
+            alert('파일 처리 중 오류가 발생했습니다.');
+            console.error(error);
+            dropZone.style.display = 'block';
+            progress.classList.remove('show');
+        }
+    }
+
+    async function processPDFtoWord(pdfData) {
+        const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+        const totalPages = pdf.numPages;
+        const docChildren = []; // docx 단락/이미지 객체 배열
+        
+        let totalImages = 0;
+        let totalChars = 0;
+
+        for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+            progressBar.style.width = `${(pageNum / totalPages) * 100}%`;
+            statusText.textContent = `${totalPages}페이지 중 ${pageNum}페이지 분석 중...`;
+            
+            const page = await pdf.getPage(pageNum);
+            
+            // 1. 페이지 구분선 추가
+            docChildren.push(new docx.Paragraph({
+                text: `--- [ ${pageNum} 페이지 ] ---`,
+                heading: docx.HeadingLevel.HEADING_3,
+                spacing: { before: 400, after: 200 }
+            }));
+
+            // 2. 텍스트 추출
+            const textContent = await page.getTextContent();
+            let pageText = "";
+            let lastY = -1;
+
+            for (let item of textContent.items) {
+                if (lastY !== -1 && Math.abs(item.transform[5] - lastY) > (item.height * 0.5)) {
+                    pageText += "\n";
+                }
+                pageText += item.str;
+                lastY = item.transform[5];
+            }
+
+            if (pageText.trim()) {
+                totalChars += pageText.length;
+                const lines = pageText.split('\n');
+                lines.forEach(line => {
+                    if(line.trim()) {
+                        docChildren.push(new docx.Paragraph({
+                            children: [new docx.TextRun({ text: line.trim(), size: 22 })], // size: 22 = 11pt
+                            spacing: { after: 120 }
+                        }));
+                    }
+                });
+            }
+
+            // 3. 이미지 추출
+            const ops = await page.getOperatorList();
+            for (let i = 0; i < ops.fnArray.length; i++) {
+                if (ops.fnArray[i] === pdfjsLib.OPS.paintImageXObject || ops.fnArray[i] === pdfjsLib.OPS.paintJpegXObject) {
+                    const imgKey = ops.argsArray[i][0];
+                    try {
+                        const imgObj = await new Promise(resolve => page.objs.get(imgKey, resolve));
+                        if (!imgObj) continue;
+
+                        let canvas = document.createElement('canvas');
+                        let ctx = canvas.getContext('2d');
+                        let w, h;
+
+                        if (imgObj instanceof HTMLImageElement || imgObj.tagName === 'IMG') {
+                            await new Promise(r => { if (imgObj.complete) r(); else imgObj.onload = r; });
+                            w = imgObj.naturalWidth; h = imgObj.naturalHeight;
+                            canvas.width = w; canvas.height = h;
+                            ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, w, h);
+                            ctx.drawImage(imgObj, 0, 0);
+                        } 
+                        else if (imgObj.width && imgObj.height && imgObj.data) {
+                            w = imgObj.width; h = imgObj.height;
+                            canvas.width = w; canvas.height = h;
+                            ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, w, h);
+                            let imgData = ctx.createImageData(w, h);
+                            let srcData = imgObj.data;
+                            let dstData = imgData.data;
+
+                            const kind = imgObj.kind;
+                            if (kind === 3 || (!kind && srcData.length === w * h * 4)) {
+                                for (let j = 0; j < dstData.length; j += 4) {
+                                    let a = srcData[j+3] / 255;
+                                    dstData[j] = srcData[j]*a + 255*(1-a);
+                                    dstData[j+1] = srcData[j+1]*a + 255*(1-a);
+                                    dstData[j+2] = srcData[j+2]*a + 255*(1-a);
+                                    dstData[j+3] = 255;
+                                }
+                            } else if (kind === 2 || (!kind && srcData.length === w * h * 3)) {
+                                for (let s = 0, d = 0; s < srcData.length; s += 3, d += 4) {
+                                    dstData[d] = srcData[s]; dstData[d+1] = srcData[s+1]; dstData[d+2] = srcData[s+2]; dstData[d+3] = 255;
+                                }
+                            }
+                            ctx.putImageData(imgData, 0, 0);
+                        } else {
+                            continue;
+                        }
+
+                        // 워드 문서를 넘지 않게 이미지 크기 조정 (최대 너비 600px 기준)
+                        let docW = w; let docH = h;
+                        if (docW > 600) { docH = (600 / docW) * docH; docW = 600; }
+
+                        // 캔버스를 Base64 JPG로 변환 후 Uint8Array로 변환
+                        const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+                        const uint8Array = dataURItoUint8Array(dataUrl);
+
+                        docChildren.push(new docx.Paragraph({
+                            children: [
+                                new docx.ImageRun({
+                                    data: uint8Array,
+                                    transformation: { width: docW, height: docH },
+                                    type: "jpeg"
+                                })
+                            ],
+                            alignment: docx.AlignmentType.CENTER,
+                            spacing: { before: 200, after: 200 }
+                        }));
+                        totalImages++;
+
+                    } catch(e) { console.warn("이미지 변환 에러", e); }
+                }
+            }
+            page.cleanup();
+        }
+
+        // 4. 워드(docx) 문서 생성
+        statusText.textContent = "최종 문서 파일(DOCX)을 생성 중입니다...";
+        const doc = new docx.Document({
+            sections: [{
+                properties: {},
+                children: docChildren
+            }]
+        });
+
+        generatedBlob = await docx.Packer.toBlob(doc);
+        
+        // 결과 UI 표시
+        document.getElementById('summaryText').innerHTML = `
+            총 <b>${totalPages}페이지</b> 분석 완료.<br>
+            추출된 텍스트 <b>${totalChars.toLocaleString()}자</b>와 이미지 <b>${totalImages}개</b>가 병합되었습니다.
+        `;
+        progress.classList.remove('show');
+        results.classList.add('show');
+    }
+
+    // 다운로드 버튼 이벤트
+    downloadBtn.addEventListener('click', () => {
+        if (generatedBlob) {
+            saveAs(generatedBlob, `${currentFileName}_통합본.docx`);
+        }
+    });
+</script>
+
+</body>
+</html>
