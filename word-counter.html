@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>문서 분석기 — 단어 & 특수문자 카운터</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --primary: #4F46E5;
+            --primary-light: #818CF8;
+            --primary-dark: #3730A3;
+            --bg: #F8FAFC;
+            --surface: #FFFFFF;
+            --text: #1E293B;
+            --text-secondary: #64748B;
+            --border: #E2E8F0;
+            --success: #10B981;
+            --warning: #F59E0B;
+            --error: #EF4444;
+            --radius: 16px;
+            --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+        }
+
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .header {
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
+            color: white;
+            padding: 2rem 1rem;
+            text-align: center;
+        }
+        .header h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem; }
+        .header p  { opacity: 0.85; font-size: 0.95rem; }
+
+        .container {
+            max-width: 900px;
+            margin: -2rem auto 2rem;
+            padding: 0 1rem;
+        }
+
+        /* ---- Drop Zone ---- */
+        .drop-zone {
+            background: var(--surface);
+            border: 2px dashed var(--border);
+            border-radius: var(--radius);
+            padding: 3rem 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: var(--shadow);
+            position: relative;
+        }
+        .drop-zone:hover, .drop-zone.dragover {
+            border-color: var(--primary);
+            background: #EEF2FF;
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+        }
+        .drop-zone-icon { font-size: 3rem; margin-bottom: 0.75rem; }
+        .drop-zone-text { font-size: 1.05rem; color: var(--text-secondary); margin-bottom: 0.5rem; }
+        .drop-zone-hint { font-size: 0.8rem; color: var(--text-secondary); opacity: 0.7; }
+        .drop-zone input[type="file"] { display: none; }
+
+        /* ---- File Info ---- */
+        .file-info {
+            display: none;
+            background: var(--surface);
+            border-radius: var(--radius);
+            padding: 1rem 1.25rem;
+            margin-top: 1rem;
+            box-shadow: var(--shadow);
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .file-info.show { display: flex; }
+        .file-info .icon { font-size: 1.5rem; }
+        .file-info .name { flex: 1; font-weight: 600; font-size: 0.95rem; word-break: break-all; }
+        .file-info .size { color: var(--text-secondary); font-size: 0.85rem; }
+        .file-info .remove-btn {
+            background: none; border: none; cursor: pointer; font-size: 1.2rem;
+            color: var(--text-secondary); padding: 0.25rem; border-radius: 6px;
+            transition: all 0.2s;
+        }
+        .file-info .remove-btn:hover { color: var(--error); background: #FEE2E2; }
+
+        /* ---- Loading ---- */
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 2rem;
+        }
+        .loading.show { display: block; }
+        .spinner {
+            width: 40px; height: 40px;
+            border: 4px solid var(--border);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 1rem;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ---- Results ---- */
+        .results {
+            display: none;
+            margin-top: 1.5rem;
+        }
+        .results.show { display: block; }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .stat-card {
+            background: var(--surface);
+            border-radius: var(--radius);
+            padding: 1.25rem;
+            box-shadow: var(--shadow);
+            text-align: center;
+            transition: transform 0.2s;
+            animation: fadeUp 0.4s ease both;
+        }
+        .stat-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); }
+        .stat-card:nth-child(1) { animation-delay: 0.05s; }
+        .stat-card:nth-child(2) { animation-delay: 0.10s; }
+        .stat-card:nth-child(3) { animation-delay: 0.15s; }
+        .stat-card:nth-child(4) { animation-delay: 0.20s; }
+        .stat-card:nth-child(5) { animation-delay: 0.25s; }
+        .stat-card:nth-child(6) { animation-delay: 0.30s; }
+
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(12px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        .stat-value {
+            font-size: 2rem; font-weight: 700; color: var(--primary);
+            margin-bottom: 0.25rem;
+        }
+        .stat-label { font-size: 0.85rem; color: var(--text-secondary); }
+
+        /* ---- Detail Sections ---- */
+        .detail-section {
+            background: var(--surface);
+            border-radius: var(--radius);
+            padding: 1.5rem;
+            box-shadow: var(--shadow);
+            margin-bottom: 1rem;
+            animation: fadeUp 0.4s ease 0.35s both;
+        }
+        .detail-section h3 {
+            font-size: 1rem; margin-bottom: 1rem;
+            padding-bottom: 0.5rem; border-bottom: 1px solid var(--border);
+        }
+
+        /* Special char table */
+        .char-table { width: 100%; border-collapse: collapse; }
+        .char-table th, .char-table td {
+            padding: 0.5rem 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.9rem;
+        }
+        .char-table th {
+            background: #F1F5F9;
+            font-weight: 600;
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+        }
+        .char-table td:first-child {
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--primary);
+            min-width: 60px;
+            text-align: center;
+        }
+        .char-table td:last-child {
+            font-weight: 600;
+            text-align: right;
+        }
+        .char-table tbody tr:hover { background: #F8FAFC; }
+
+        /* Word frequency */
+        .freq-bar-container {
+            display: flex; align-items: center; gap: 0.5rem;
+            margin-bottom: 0.4rem; font-size: 0.875rem;
+        }
+        .freq-word {
+            min-width: 100px; text-align: right; font-weight: 600;
+            color: var(--text); word-break: break-all;
+        }
+        .freq-bar-wrapper { flex: 1; height: 22px; background: #F1F5F9; border-radius: 11px; overflow: hidden; }
+        .freq-bar {
+            height: 100%; background: linear-gradient(90deg, var(--primary-light), var(--primary));
+            border-radius: 11px; min-width: 4px;
+            transition: width 0.6s ease;
+        }
+        .freq-count { min-width: 40px; font-size: 0.8rem; color: var(--text-secondary); }
+
+        /* Text preview */
+        .text-preview {
+            background: #F8FAFC;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            max-height: 300px;
+            overflow-y: auto;
+            font-size: 0.875rem;
+            line-height: 1.7;
+            white-space: pre-wrap;
+            word-break: break-all;
+            color: var(--text-secondary);
+        }
+
+        .no-data { text-align: center; color: var(--text-secondary); padding: 1rem; font-size: 0.9rem; }
+
+        /* Footer */
+        .footer {
+            text-align: center; padding: 2rem; color: var(--text-secondary);
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>📄 문서 분석기</h1>
+    <p>문서를 업로드하면 단어, 글자, 특수문자를 분석합니다</p>
+</div>
+
+<div class="container">
+    <!-- Drop Zone -->
+    <div class="drop-zone" id="dropZone">
+        <div class="drop-zone-icon">📁</div>
+        <div class="drop-zone-text">파일을 여기에 드래그하거나 클릭하여 업로드</div>
+        <div class="drop-zone-hint">지원 형식: TXT, PDF, DOCX, CSV, MD, HTML</div>
+        <input type="file" id="fileInput" accept=".txt,.pdf,.docx,.csv,.md,.html,.htm">
+    </div>
+
+    <!-- File Info -->
+    <div class="file-info" id="fileInfo">
+        <span class="icon" id="fileIcon">📄</span>
+        <span class="name" id="fileName"></span>
+        <span class="size" id="fileSize"></span>
+        <button class="remove-btn" id="removeBtn" title="파일 제거">✕</button>
+    </div>
+
+    <!-- Loading -->
+    <div class="loading" id="loading">
+        <div class="spinner"></div>
+        <p>문서를 분석 중입니다…</p>
+    </div>
+
+    <!-- Results -->
+    <div class="results" id="results">
+        <div class="stat-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="statWords">0</div>
+                <div class="stat-label">단어 수</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statChars">0</div>
+                <div class="stat-label">글자 수 (공백 포함)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statCharsNoSpace">0</div>
+                <div class="stat-label">글자 수 (공백 제외)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statSpecial">0</div>
+                <div class="stat-label">특수문자 수</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statLines">0</div>
+                <div class="stat-label">줄 수</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statParagraphs">0</div>
+                <div class="stat-label">문단 수</div>
+            </div>
+        </div>
+
+        <!-- Special Characters Breakdown -->
+        <div class="detail-section">
+            <h3>🔣 특수문자 상세</h3>
+            <div id="specialCharDetail"></div>
+        </div>
+
+        <!-- Top Words -->
+        <div class="detail-section">
+            <h3>📊 빈출 단어 TOP 15</h3>
+            <div id="wordFrequency"></div>
+        </div>
+
+        <!-- Text Preview -->
+        <div class="detail-section">
+            <h3>📝 추출된 텍스트 미리보기</h3>
+            <div class="text-preview" id="textPreview"></div>
+        </div>
+    </div>
+</div>
+
+<div class="footer">문서 분석기 — 모든 파일은 브라우저에서만 처리되며 서버로 전송되지 않습니다.</div>
+
+<script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    const dropZone  = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const fileInfo  = document.getElementById('fileInfo');
+    const loading   = document.getElementById('loading');
+    const results   = document.getElementById('results');
+
+    // ---- Drop / Click ----
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', () => { if (fileInput.files.length) handleFile(fileInput.files[0]); });
+    document.getElementById('removeBtn').addEventListener('click', resetUI);
+
+    // ---- Format helpers ----
+    function formatBytes(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+    function formatNumber(n) { return n.toLocaleString('ko-KR'); }
+
+    function getFileIcon(ext) {
+        const icons = { pdf: '📕', docx: '📘', doc: '📘', txt: '📄', csv: '📊', md: '📝', html: '🌐', htm: '🌐' };
+        return icons[ext] || '📄';
+    }
+
+    // ---- UI helpers ----
+    function resetUI() {
+        fileInput.value = '';
+        fileInfo.classList.remove('show');
+        results.classList.remove('show');
+        loading.classList.remove('show');
+        dropZone.style.display = '';
+    }
+
+    function showFileInfo(file) {
+        const ext = file.name.split('.').pop().toLowerCase();
+        document.getElementById('fileIcon').textContent = getFileIcon(ext);
+        document.getElementById('fileName').textContent = file.name;
+        document.getElementById('fileSize').textContent = formatBytes(file.size);
+        fileInfo.classList.add('show');
+        dropZone.style.display = 'none';
+    }
+
+    // ---- Main handler ----
+    async function handleFile(file) {
+        const ext = file.name.split('.').pop().toLowerCase();
+        const supported = ['txt', 'pdf', 'docx', 'csv', 'md', 'html', 'htm'];
+        if (!supported.includes(ext)) {
+            alert('지원하지 않는 파일 형식입니다.\n지원 형식: ' + supported.join(', '));
+            return;
+        }
+
+        showFileInfo(file);
+        loading.classList.add('show');
+        results.classList.remove('show');
+
+        try {
+            const text = await extractText(file, ext);
+            analyzeText(text);
+        } catch (err) {
+            alert('파일을 처리하는 중 오류가 발생했습니다:\n' + err.message);
+            console.error(err);
+        } finally {
+            loading.classList.remove('show');
+        }
+    }
+
+    // ---- Text extraction ----
+    async function extractText(file, ext) {
+        if (['txt', 'csv', 'md', 'html', 'htm'].includes(ext)) {
+            let text = await file.text();
+            if (['html', 'htm'].includes(ext)) {
+                const doc = new DOMParser().parseFromString(text, 'text/html');
+                text = doc.body.innerText || doc.body.textContent || '';
+            }
+            return text;
+        }
+
+        if (ext === 'pdf') {
+            const buf = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+            let fullText = '';
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const content = await page.getTextContent();
+                const pageText = content.items.map(it => it.str).join(' ');
+                fullText += pageText + '\n';
+            }
+            return fullText;
+        }
+
+        if (ext === 'docx') {
+            const buf = await file.arrayBuffer();
+            const result = await mammoth.extractRawText({ arrayBuffer: buf });
+            return result.value;
+        }
+
+        return '';
+    }
+
+    // ---- Analysis ----
+    function analyzeText(text) {
+        // Basic counts
+        const chars = text.length;
+        const charsNoSpace = text.replace(/\s/g, '').length;
+        const lines = text ? text.split(/\r?\n/).length : 0;
+        const paragraphs = text ? text.split(/\n\s*\n/).filter(p => p.trim().length > 0).length : 0;
+
+        // Words — handles Korean, CJK, and Latin words
+        const words = text.trim() ? text.trim().split(/\s+/).filter(w => w.length > 0).length : 0;
+
+        // Special characters (non-alphanumeric, non-whitespace, non-CJK)
+        // CJK range: \u3000-\u9FFF, \uAC00-\uD7AF (Korean), etc.
+        const specialCharRegex = /[^\w\s\u1100-\u11FF\u3000-\u303F\u3130-\u318F\uAC00-\uD7AF\u4E00-\u9FFF\uFF00-\uFFEF]/g;
+        const specialChars = text.match(specialCharRegex) || [];
+
+        // Special char breakdown
+        const charMap = {};
+        for (const ch of specialChars) {
+            charMap[ch] = (charMap[ch] || 0) + 1;
+        }
+        const sortedChars = Object.entries(charMap).sort((a, b) => b[1] - a[1]);
+
+        // Word frequency (filter out 1-char words for relevance, unless Korean)
+        const wordList = text.trim() ? text.trim().split(/\s+/) : [];
+        const wordMap = {};
+        for (const w of wordList) {
+            const lower = w.toLowerCase().replace(/[^\w\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF\u4E00-\u9FFF]/g, '');
+            if (lower.length === 0) continue;
+            wordMap[lower] = (wordMap[lower] || 0) + 1;
+        }
+        const topWords = Object.entries(wordMap).sort((a, b) => b[1] - a[1]).slice(0, 15);
+
+        // Update UI
+        document.getElementById('statWords').textContent = formatNumber(words);
+        document.getElementById('statChars').textContent = formatNumber(chars);
+        document.getElementById('statCharsNoSpace').textContent = formatNumber(charsNoSpace);
+        document.getElementById('statSpecial').textContent = formatNumber(specialChars.length);
+        document.getElementById('statLines').textContent = formatNumber(lines);
+        document.getElementById('statParagraphs').textContent = formatNumber(paragraphs);
+
+        // Special char table
+        const charDetailEl = document.getElementById('specialCharDetail');
+        if (sortedChars.length === 0) {
+            charDetailEl.innerHTML = '<div class="no-data">특수문자가 없습니다.</div>';
+        } else {
+            let html = '<table class="char-table"><thead><tr><th>문자</th><th>이름</th><th>개수</th></tr></thead><tbody>';
+            for (const [ch, count] of sortedChars) {
+                html += `<tr><td>${escapeHtml(ch)}</td><td>${getCharName(ch)}</td><td>${formatNumber(count)}</td></tr>`;
+            }
+            html += '</tbody></table>';
+            charDetailEl.innerHTML = html;
+        }
+
+        // Word frequency bars
+        const freqEl = document.getElementById('wordFrequency');
+        if (topWords.length === 0) {
+            freqEl.innerHTML = '<div class="no-data">분석할 단어가 없습니다.</div>';
+        } else {
+            const maxCount = topWords[0][1];
+            let html = '';
+            for (const [word, count] of topWords) {
+                const pct = (count / maxCount * 100).toFixed(1);
+                html += `<div class="freq-bar-container">
+                    <span class="freq-word">${escapeHtml(word)}</span>
+                    <div class="freq-bar-wrapper"><div class="freq-bar" style="width:${pct}%"></div></div>
+                    <span class="freq-count">${formatNumber(count)}</span>
+                </div>`;
+            }
+            freqEl.innerHTML = html;
+        }
+
+        // Text preview
+        const preview = text.length > 3000 ? text.substring(0, 3000) + '\n\n… (이하 생략)' : text;
+        document.getElementById('textPreview').textContent = preview;
+
+        results.classList.add('show');
+    }
+
+    // ---- Utilities ----
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    function getCharName(ch) {
+        const names = {
+            '.': '마침표', ',': '쉼표', '!': '느낌표', '?': '물음표',
+            ';': '세미콜론', ':': '콜론', '"': '큰따옴표', "'": '작은따옴표',
+            '(': '여는 괄호', ')': '닫는 괄호', '[': '여는 대괄호', ']': '닫는 대괄호',
+            '{': '여는 중괄호', '}': '닫는 중괄호', '/': '슬래시', '\\': '역슬래시',
+            '|': '파이프', '~': '물결표', '`': '백틱', '@': '앳', '#': '샵',
+            '$': '달러', '%': '퍼센트', '^': '캐럿', '&': '앰퍼샌드', '*': '별표',
+            '-': '하이픈', '+': '더하기', '=': '등호', '<': '작다', '>': '크다',
+            '…': '말줄임표', '—': '엠대시', '–': '엔대시',
+            '「': '꺾쇠 열기', '」': '꺾쇠 닫기', '『': '겹꺾쇠 열기', '』': '겹꺾쇠 닫기',
+            '·': '가운뎃점', '°': '도 기호', '©': '저작권', '®': '등록상표', '™': '상표',
+            '→': '오른쪽 화살표', '←': '왼쪽 화살표', '↑': '위 화살표', '↓': '아래 화살표',
+            '×': '곱하기', '÷': '나누기', '±': '플러스마이너스', '≠': '같지않음',
+            '≤': '작거나같음', '≥': '크거나같음', '∞': '무한대', '√': '제곱근',
+            '\u201C': '왼쪽 겹따옴표', '\u201D': '오른쪽 겹따옴표',
+            '\u2018': '왼쪽 홑따옴표', '\u2019': '오른쪽 홑따옴표',
+        };
+        return names[ch] || `U+${ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`;
+    }
+</script>
+
+</body>
+</html>

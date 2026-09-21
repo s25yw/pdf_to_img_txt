@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF 이미지 추출기</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --primary: #7C3AED;
+            --primary-light: #A78BFA;
+            --primary-dark: #5B21B6;
+            --bg: #F8FAFC;
+            --surface: #FFFFFF;
+            --text: #1E293B;
+            --text-secondary: #64748B;
+            --border: #E2E8F0;
+            --success: #10B981;
+            --error: #EF4444;
+            --radius: 16px;
+            --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+        }
+
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .header {
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
+            color: white;
+            padding: 2rem 1rem;
+            text-align: center;
+        }
+        .header h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem; }
+        .header p  { opacity: 0.85; font-size: 0.95rem; }
+
+        .container {
+            max-width: 1000px;
+            margin: -2rem auto 2rem;
+            padding: 0 1rem;
+        }
+
+        /* ---- Drop Zone ---- */
+        .drop-zone {
+            background: var(--surface);
+            border: 2px dashed var(--border);
+            border-radius: var(--radius);
+            padding: 3rem 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: var(--shadow);
+        }
+        .drop-zone:hover, .drop-zone.dragover {
+            border-color: var(--primary);
+            background: #F5F3FF;
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+        }
+        .drop-zone-icon { font-size: 3rem; margin-bottom: 0.75rem; }
+        .drop-zone-text { font-size: 1.05rem; color: var(--text-secondary); margin-bottom: 0.5rem; }
+        .drop-zone-hint { font-size: 0.8rem; color: var(--text-secondary); opacity: 0.7; }
+        .drop-zone input[type="file"] { display: none; }
+
+        /* ---- File Info ---- */
+        .file-info {
+            display: none;
+            background: var(--surface);
+            border-radius: var(--radius);
+            padding: 1rem 1.25rem;
+            margin-top: 1rem;
+            box-shadow: var(--shadow);
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .file-info.show { display: flex; }
+        .file-info .icon { font-size: 1.5rem; }
+        .file-info .name { flex: 1; font-weight: 600; font-size: 0.95rem; word-break: break-all; }
+        .file-info .size { color: var(--text-secondary); font-size: 0.85rem; }
+        .file-info .remove-btn {
+            background: none; border: none; cursor: pointer; font-size: 1.2rem;
+            color: var(--text-secondary); padding: 0.25rem; border-radius: 6px;
+            transition: all 0.2s;
+        }
+        .file-info .remove-btn:hover { color: var(--error); background: #FEE2E2; }
+
+        /* ---- Progress ---- */
+        .progress-container {
+            display: none;
+            background: var(--surface);
+            border-radius: var(--radius);
+            padding: 1.5rem;
+            margin-top: 1rem;
+            box-shadow: var(--shadow);
+            text-align: center;
+        }
+        .progress-container.show { display: block; }
+        .progress-bar-wrapper {
+            width: 100%;
+            height: 8px;
+            background: #E2E8F0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 1rem 0 0.5rem;
+        }
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), var(--primary-light));
+            border-radius: 4px;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .progress-text { font-size: 0.85rem; color: var(--text-secondary); }
+        .spinner-inline {
+            display: inline-block;
+            width: 20px; height: 20px;
+            border: 3px solid var(--border);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            vertical-align: middle;
+            margin-right: 0.5rem;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ---- Results ---- */
+        .results {
+            display: none;
+            margin-top: 1.5rem;
+        }
+        .results.show { display: block; }
+
+        .results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+        .results-header h2 {
+            font-size: 1.15rem;
+            color: var(--text);
+        }
+        .results-header .count {
+            background: var(--primary);
+            color: white;
+            padding: 0.15rem 0.6rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-left: 0.5rem;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.6rem 1.2rem;
+            border: none;
+            border-radius: 10px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgb(124 58 237 / 0.3);
+        }
+        .btn-primary:disabled {
+            background: var(--text-secondary);
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        .btn-outline {
+            background: transparent;
+            color: var(--primary);
+            border: 2px solid var(--primary);
+        }
+        .btn-outline:hover {
+            background: #F5F3FF;
+        }
+
+        /* ---- Image Grid ---- */
+        .image-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 1rem;
+        }
+
+        .image-card {
+            background: var(--surface);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            overflow: hidden;
+            transition: all 0.3s ease;
+            animation: fadeUp 0.4s ease both;
+        }
+        .image-card:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(16px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        .image-card .thumb-wrapper {
+            width: 100%;
+            aspect-ratio: 4 / 3;
+            background: #F1F5F9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        }
+        .image-card .thumb-wrapper img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        .image-card .badge {
+            position: absolute;
+            top: 0.5rem;
+            left: 0.5rem;
+            background: rgba(0,0,0,0.6);
+            color: white;
+            padding: 0.15rem 0.5rem;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+        .image-card .card-body {
+            padding: 0.75rem 1rem;
+        }
+        .image-card .card-title {
+            font-weight: 600;
+            font-size: 0.85rem;
+            margin-bottom: 0.25rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .image-card .card-meta {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+        .image-card .card-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+        .image-card .card-actions .btn {
+            flex: 1;
+            justify-content: center;
+            padding: 0.45rem 0.5rem;
+            font-size: 0.78rem;
+        }
+
+        /* ---- Mode Toggle ---- */
+        .mode-toggle {
+            display: flex;
+            background: var(--surface);
+            border-radius: var(--radius);
+            padding: 0.5rem;
+            box-shadow: var(--shadow);
+            margin-top: 1rem;
+            gap: 0.5rem;
+        }
+        .mode-toggle .mode-btn {
+            flex: 1;
+            padding: 0.6rem 1rem;
+            border: none;
+            background: transparent;
+            border-radius: 12px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            cursor: pointer;
+            color: var(--text-secondary);
+            transition: all 0.3s;
+        }
+        .mode-toggle .mode-btn.active {
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 2px 8px rgb(124 58 237 / 0.3);
+        }
+
+        /* ---- No Images ---- */
+        .no-images {
+            background: var(--surface);
+            border-radius: var(--radius);
+            padding: 3rem 2rem;
+            text-align: center;
+            box-shadow: var(--shadow);
+        }
+        .no-images .icon { font-size: 3rem; margin-bottom: 0.75rem; }
+        .no-images p { color: var(--text-secondary); }
+        .no-images .hint {
+            font-size: 0.85rem;
+            margin-top: 0.75rem;
+            color: var(--text-secondary);
+            opacity: 0.7;
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center; padding: 2rem; color: var(--text-secondary);
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>🖼️ PDF 이미지 추출기</h1>
+    <p>PDF에서 이미지를 추출하여 JPG로 저장합니다</p>
+</div>
+
+<div class="container">
+    <!-- Drop Zone -->
+    <div class="drop-zone" id="dropZone">
+        <div class="drop-zone-icon">📕</div>
+        <div class="drop-zone-text">PDF 파일을 여기에 드래그하거나 클릭하여 업로드</div>
+        <div class="drop-zone-hint">지원 형식: PDF</div>
+        <input type="file" id="fileInput" accept=".pdf">
+    </div>
+
+    <!-- File Info -->
+    <div class="file-info" id="fileInfo">
+        <span class="icon">📕</span>
+        <span class="name" id="fileName"></span>
+        <span class="size" id="fileSize"></span>
+        <button class="remove-btn" id="removeBtn" title="파일 제거">✕</button>
+    </div>
+
+    <!-- Mode Toggle -->
+    <div class="mode-toggle" id="modeToggle" style="display:none">
+        <button class="mode-btn active" data-mode="embedded" id="modeEmbedded">📦 내장 이미지 추출</button>
+        <button class="mode-btn" data-mode="render" id="modeRender">📄 페이지 렌더링</button>
+    </div>
+
+    <!-- Progress -->
+    <div class="progress-container" id="progress">
+        <div><span class="spinner-inline"></span><span id="progressLabel">이미지를 추출하는 중…</span></div>
+        <div class="progress-bar-wrapper">
+            <div class="progress-bar" id="progressBar"></div>
+        </div>
+        <div class="progress-text" id="progressText">0%</div>
+    </div>
+
+    <!-- Results -->
+    <div class="results" id="results">
+        <div class="results-header">
+            <h2>추출된 이미지 <span class="count" id="imageCount">0</span></h2>
+            <div>
+                <button class="btn btn-primary" id="downloadAllBtn" disabled>📥 전체 ZIP 다운로드</button>
+            </div>
+        </div>
+        <div id="imageContainer"></div>
+    </div>
+</div>
+
+<div class="footer">PDF 이미지 추출기 — 모든 파일은 브라우저에서만 처리되며 서버로 전송되지 않습니다.</div>
+
+<script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    const dropZone     = document.getElementById('dropZone');
+    const fileInput    = document.getElementById('fileInput');
+    const fileInfo     = document.getElementById('fileInfo');
+    const progress     = document.getElementById('progress');
+    const progressBar  = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const progressLabel= document.getElementById('progressLabel');
+    const results      = document.getElementById('results');
+    const imageContainer = document.getElementById('imageContainer');
+    const downloadAllBtn = document.getElementById('downloadAllBtn');
+    const modeToggle   = document.getElementById('modeToggle');
+
+    let currentImages = [];
+    let currentMode = 'embedded';
+    let currentPdfData = null;
+    let currentFileName = '';
+
+    // ---- Drop / Click ----
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', () => { if (fileInput.files.length) handleFile(fileInput.files[0]); });
+    document.getElementById('removeBtn').addEventListener('click', resetUI);
+
+    // Mode toggle
+    document.getElementById('modeEmbedded').addEventListener('click', () => switchMode('embedded'));
+    document.getElementById('modeRender').addEventListener('click', () => switchMode('render'));
+
+    downloadAllBtn.addEventListener('click', downloadAllAsZip);
+
+    // ---- Helpers ----
+    function formatBytes(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function resetUI() {
+        fileInput.value = '';
+        fileInfo.classList.remove('show');
+        results.classList.remove('show');
+        progress.classList.remove('show');
+        modeToggle.style.display = 'none';
+        dropZone.style.display = '';
+        currentImages = [];
+        currentPdfData = null;
+    }
+
+    function showFileInfo(file) {
+        document.getElementById('fileName').textContent = file.name;
+        document.getElementById('fileSize').textContent = formatBytes(file.size);
+        fileInfo.classList.add('show');
+        dropZone.style.display = 'none';
+    }
+
+    function updateProgress(pct, label) {
+        progressBar.style.width = pct + '%';
+        progressText.textContent = Math.round(pct) + '%';
+        if (label) progressLabel.textContent = label;
+    }
+
+    async function switchMode(mode) {
+        if (mode === currentMode || !currentPdfData) return;
+        currentMode = mode;
+        document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+        document.querySelector(`[data-mode="${mode}"]`).classList.add('active');
+        await processCurrentPdf();
+    }
+
+    // ---- Main ----
+    async function handleFile(file) {
+        if (!file.name.toLowerCase().endsWith('.pdf')) {
+            alert('PDF 파일만 지원합니다.');
+            return;
+        }
+
+        showFileInfo(file);
+        currentFileName = file.name.replace(/\.pdf$/i, '');
+        currentPdfData = await file.arrayBuffer();
+        modeToggle.style.display = '';
+        await processCurrentPdf();
+    }
+
+    async function processCurrentPdf() {
+        progress.classList.add('show');
+        results.classList.remove('show');
+        currentImages = [];
+        updateProgress(0, currentMode === 'embedded' ? '내장 이미지를 추출하는 중…' : '페이지를 렌더링하는 중…');
+
+        try {
+            const pdf = await pdfjsLib.getDocument({ data: currentPdfData.slice(0) }).promise;
+            const totalPages = pdf.numPages;
+
+            if (currentMode === 'embedded') {
+                await extractEmbeddedImages(pdf, totalPages);
+            } else {
+                await renderPagesAsImages(pdf, totalPages);
+            }
+
+            displayResults();
+        } catch (err) {
+            alert('PDF 처리 중 오류가 발생했습니다:\n' + err.message);
+            console.error(err);
+        } finally {
+            progress.classList.remove('show');
+        }
+    }
+
+    // ---- Extract Embedded Images ----
+    async function extractEmbeddedImages(pdf, totalPages) {
+        const seenSizes = new Set(); // simple dedup by dimension+size
+
+        for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+            updateProgress((pageNum / totalPages) * 100, `페이지 ${pageNum}/${totalPages} 처리 중…`);
+
+            const page = await pdf.getPage(pageNum);
+            const ops = await page.getOperatorList();
+
+            const imgKeys = [];
+            for (let i = 0; i < ops.fnArray.length; i++) {
+                const fn = ops.fnArray[i];
+                if (fn === pdfjsLib.OPS.paintImageXObject || fn === pdfjsLib.OPS.paintJpegXObject) {
+                    const key = ops.argsArray[i][0];
+                    if (!imgKeys.includes(key)) imgKeys.push(key);
+                } else if (fn === pdfjsLib.OPS.paintInlineImageXObject) {
+                    // Inline image — data is directly in args
+                    const inlineData = ops.argsArray[i][0];
+                    if (inlineData && inlineData.width && inlineData.height) {
+                        if (inlineData.width >= 20 && inlineData.height >= 20) {
+                            const dataUrl = imageObjToDataUrl(inlineData);
+                            if (dataUrl) {
+                                currentImages.push({
+                                    name: `${currentFileName}_p${pageNum}_img${currentImages.length + 1}`,
+                                    dataUrl,
+                                    width: inlineData.width,
+                                    height: inlineData.height,
+                                    page: pageNum,
+                                    type: 'inline'
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            for (const imgKey of imgKeys) {
+                try {
+                    const imgObj = await new Promise((resolve, reject) => {
+                        const timeout = setTimeout(() => reject(new Error('timeout')), 8000);
+                        page.objs.get(imgKey, (data) => {
+                            clearTimeout(timeout);
+                            resolve(data);
+                        });
+                    });
+
+                    if (!imgObj) continue;
+
+                    // Handle HTMLImageElement (JPEG pass-through)
+                    if (imgObj instanceof HTMLImageElement || imgObj.tagName === 'IMG') {
+                        await new Promise(r => { if (imgObj.complete) r(); else imgObj.onload = r; });
+                        if (imgObj.naturalWidth < 20 || imgObj.naturalHeight < 20) continue;
+
+                        const canvas = document.createElement('canvas');
+                        canvas.width = imgObj.naturalWidth;
+                        canvas.height = imgObj.naturalHeight;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(imgObj, 0, 0);
+                        const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+
+                        const key = `${imgObj.naturalWidth}x${imgObj.naturalHeight}`;
+                        if (!seenSizes.has(key + '_' + pageNum)) {
+                            seenSizes.add(key + '_' + pageNum);
+                            currentImages.push({
+                                name: `${currentFileName}_p${pageNum}_img${currentImages.length + 1}`,
+                                dataUrl,
+                                width: imgObj.naturalWidth,
+                                height: imgObj.naturalHeight,
+                                page: pageNum,
+                                type: 'jpeg'
+                            });
+                        }
+                        continue;
+                    }
+
+                    // Handle {src} object (blob URL)
+                    if (imgObj.src && typeof imgObj.src === 'string') {
+                        const img = new Image();
+                        img.src = imgObj.src;
+                        await new Promise((r, j) => { img.onload = r; img.onerror = j; });
+                        if (img.naturalWidth < 20 || img.naturalHeight < 20) continue;
+
+                        const canvas = document.createElement('canvas');
+                        canvas.width = img.naturalWidth;
+                        canvas.height = img.naturalHeight;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0);
+                        const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+
+                        currentImages.push({
+                            name: `${currentFileName}_p${pageNum}_img${currentImages.length + 1}`,
+                            dataUrl,
+                            width: img.naturalWidth,
+                            height: img.naturalHeight,
+                            page: pageNum,
+                            type: 'blob'
+                        });
+                        continue;
+                    }
+
+                    // Handle raw pixel data {width, height, kind, data}
+                    if (imgObj.width && imgObj.height && imgObj.data) {
+                        if (imgObj.width < 20 || imgObj.height < 20) continue;
+
+                        const dataUrl = imageObjToDataUrl(imgObj);
+                        if (!dataUrl) continue;
+
+                        const key = `${imgObj.width}x${imgObj.height}_${imgObj.data.length}`;
+                        if (!seenSizes.has(key)) {
+                            seenSizes.add(key);
+                            currentImages.push({
+                                name: `${currentFileName}_p${pageNum}_img${currentImages.length + 1}`,
+                                dataUrl,
+                                width: imgObj.width,
+                                height: imgObj.height,
+                                page: pageNum,
+                                type: 'raw'
+                            });
+                        }
+                    }
+                } catch (e) {
+                    console.warn(`이미지 추출 실패 (key: ${imgKey}, page: ${pageNum}):`, e);
+                }
+            }
+
+            page.cleanup();
+        }
+    }
+
+    function imageObjToDataUrl(imgObj) {
+        try {
+            const w = imgObj.width;
+            const h = imgObj.height;
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+
+            let rgbaData;
+            const kind = imgObj.kind;
+
+            if (kind === 3 || (!kind && imgObj.data.length === w * h * 4)) {
+                // RGBA_32BPP
+                rgbaData = new Uint8ClampedArray(imgObj.data);
+            } else if (kind === 2 || (!kind && imgObj.data.length === w * h * 3)) {
+                // RGB_24BPP
+                rgbaData = new Uint8ClampedArray(w * h * 4);
+                for (let s = 0, d = 0; s < imgObj.data.length; s += 3, d += 4) {
+                    rgbaData[d]     = imgObj.data[s];
+                    rgbaData[d + 1] = imgObj.data[s + 1];
+                    rgbaData[d + 2] = imgObj.data[s + 2];
+                    rgbaData[d + 3] = 255;
+                }
+            } else if (kind === 1) {
+                // GRAYSCALE_1BPP
+                rgbaData = new Uint8ClampedArray(w * h * 4);
+                const rowBytes = Math.ceil(w / 8);
+                for (let y = 0; y < h; y++) {
+                    for (let x = 0; x < w; x++) {
+                        const srcIdx = y * rowBytes + (x >> 3);
+                        const bit = (imgObj.data[srcIdx] >> (7 - (x & 7))) & 1;
+                        const val = bit ? 0 : 255;
+                        const dstIdx = (y * w + x) * 4;
+                        rgbaData[dstIdx] = val;
+                        rgbaData[dstIdx + 1] = val;
+                        rgbaData[dstIdx + 2] = val;
+                        rgbaData[dstIdx + 3] = 255;
+                    }
+                }
+            } else if (imgObj.data.length === w * h) {
+                // 8-bit grayscale
+                rgbaData = new Uint8ClampedArray(w * h * 4);
+                for (let i = 0, d = 0; i < imgObj.data.length; i++, d += 4) {
+                    rgbaData[d] = rgbaData[d + 1] = rgbaData[d + 2] = imgObj.data[i];
+                    rgbaData[d + 3] = 255;
+                }
+            } else {
+                console.warn('Unknown image format:', { kind, dataLen: imgObj.data.length, expected: w * h });
+                return null;
+            }
+
+            const imageData = new ImageData(rgbaData, w, h);
+            ctx.putImageData(imageData, 0, 0);
+            return canvas.toDataURL('image/jpeg', 0.92);
+        } catch (e) {
+            console.warn('imageObjToDataUrl failed:', e);
+            return null;
+        }
+    }
+
+    // ---- Render Pages as Images ----
+    async function renderPagesAsImages(pdf, totalPages) {
+        const SCALE = 2; // 2x for quality
+
+        for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+            updateProgress((pageNum / totalPages) * 100, `페이지 ${pageNum}/${totalPages} 렌더링 중…`);
+
+            const page = await pdf.getPage(pageNum);
+            const viewport = page.getViewport({ scale: SCALE });
+
+            const canvas = document.createElement('canvas');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            const ctx = canvas.getContext('2d');
+
+            // White background
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            await page.render({ canvasContext: ctx, viewport }).promise;
+
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+
+            currentImages.push({
+                name: `${currentFileName}_page${pageNum}`,
+                dataUrl,
+                width: Math.round(viewport.width),
+                height: Math.round(viewport.height),
+                page: pageNum,
+                type: 'render'
+            });
+
+            page.cleanup();
+        }
+    }
+
+    // ---- Display Results ----
+    function displayResults() {
+        document.getElementById('imageCount').textContent = currentImages.length;
+
+        if (currentImages.length === 0) {
+            imageContainer.innerHTML = `
+                <div class="no-images">
+                    <div class="icon">🔍</div>
+                    <p>이 PDF에서 이미지를 찾을 수 없습니다.</p>
+                    <p class="hint">벡터 그래픽이나 텍스트만 포함된 PDF일 수 있습니다.<br>
+                    "페이지 렌더링" 모드로 전환하면 각 페이지를 이미지로 저장할 수 있습니다.</p>
+                </div>`;
+            downloadAllBtn.disabled = true;
+        } else {
+            let html = '<div class="image-grid">';
+            currentImages.forEach((img, idx) => {
+                html += `
+                    <div class="image-card" style="animation-delay: ${idx * 0.05}s">
+                        <div class="thumb-wrapper">
+                            <img src="${img.dataUrl}" alt="${img.name}" loading="lazy">
+                            <span class="badge">p.${img.page}</span>
+                        </div>
+                        <div class="card-body">
+                            <div class="card-title">${img.name}.jpg</div>
+                            <div class="card-meta">${img.width} × ${img.height}px</div>
+                            <div class="card-actions">
+                                <button class="btn btn-primary" onclick="downloadSingle(${idx})">💾 JPG 저장</button>
+                                <button class="btn btn-outline" onclick="openInTab(${idx})">🔍 보기</button>
+                            </div>
+                        </div>
+                    </div>`;
+            });
+            html += '</div>';
+            imageContainer.innerHTML = html;
+            downloadAllBtn.disabled = false;
+        }
+
+        results.classList.add('show');
+    }
+
+    // ---- Download ----
+    function downloadSingle(idx) {
+        const img = currentImages[idx];
+        const a = document.createElement('a');
+        a.href = img.dataUrl;
+        a.download = img.name + '.jpg';
+        a.click();
+    }
+
+    function openInTab(idx) {
+        const img = currentImages[idx];
+        const w = window.open('');
+        w.document.write(`
+            <html><head><title>${img.name}</title></head>
+            <body style="margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#1a1a2e;">
+            <img src="${img.dataUrl}" style="max-width:100%;max-height:100vh;object-fit:contain;">
+            </body></html>`);
+    }
+
+    async function downloadAllAsZip() {
+        if (currentImages.length === 0) return;
+
+        downloadAllBtn.disabled = true;
+        downloadAllBtn.textContent = '⏳ ZIP 생성 중…';
+
+        try {
+            const zip = new JSZip();
+            const folder = zip.folder(currentFileName + '_images');
+
+            for (const img of currentImages) {
+                // Convert data URL to binary
+                const base64 = img.dataUrl.split(',')[1];
+                folder.file(img.name + '.jpg', base64, { base64: true });
+            }
+
+            const blob = await zip.generateAsync({ type: 'blob' }, (meta) => {
+                downloadAllBtn.textContent = `⏳ ZIP 생성 중… ${Math.round(meta.percent)}%`;
+            });
+
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = currentFileName + '_images.zip';
+            a.click();
+            URL.revokeObjectURL(a.href);
+        } catch (err) {
+            alert('ZIP 생성 중 오류가 발생했습니다:\n' + err.message);
+        } finally {
+            downloadAllBtn.disabled = false;
+            downloadAllBtn.textContent = '📥 전체 ZIP 다운로드';
+        }
+    }
+</script>
+
+</body>
+</html>
